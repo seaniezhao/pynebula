@@ -1,0 +1,1 @@
+NUM_BANDS = 36
