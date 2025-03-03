@@ -97,11 +97,11 @@ def estimate_ifsnr(x, naxis, fc, fres, wtype='nuttall83', stype='nuttall83'):
     返回：
       SNR1, IF1, SNR2, IF2, SNR0
       分别为：
-        - SNR1 : 在中心频率处的 SNR 特征矩阵（每列对应一个频带）
-        - IF1  : 在中心频率处的瞬时频率特征矩阵
-        - SNR2 : 在双倍中心频率处的 SNR 特征矩阵
-        - IF2  : 在双倍中心频率处的瞬时频率特征矩阵
-        - SNR0 : 由 SNR1 的特定列构成的特征矩阵（用于后续处理）
+        %   SNR1    matrix              SNR feature
+        %   SNR2    matrix              SNR feature at double central frequency
+        %   SNR0    matrix              SNR feature at half central frequency
+        %   IF1     matrix              IF feature
+        %   IF2     matrix              IF feature at double central frequency
     """
     nch = len(fc)
     ntime = len(naxis)
