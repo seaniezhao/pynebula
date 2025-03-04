@@ -7,160 +7,193 @@ import numpy as np
 import librosa
 import matplotlib.pyplot as plt
 import pyworld as pw
+import pickle
+from config import NUM_BANDS
 from nebula_est import nebula_est
-
-from train_gmm import train_and_save_models
 
 def test_with_audio_file(audio_file='test.wav', model_dir='./model'):
     """
-    Test the PyNebula F0 estimation on a real audio file.
+    Test the nebula_est F0 estimation against pyworld.
     
-    Parameters:
-        audio_file: Path to the audio file to test
-        model_dir: Directory containing the models (will be created if it doesn't exist)
+    Args:
+        audio_file (str): Path to the audio file for testing
+        model_dir (str): Directory containing the nebula models
+    
+    Returns:
+        dict: Dictionary containing comparison metrics and results
     """
-    # Check if the audio file exists
-    if not os.path.isfile(audio_file):
-        print(f"Error: Audio file '{audio_file}' not found")
-        return
+    # Print test information
+    print(f"Testing nebula_est with audio file: {audio_file}")
+    print(f"Using models from: {model_dir}")
     
-    # Check if models exist, if not, generate example models
-    if not os.path.isdir(model_dir) or len(os.listdir(model_dir)) == 0:
-        print("No pre-trained models found. Generating example models...")
-        train_and_save_models(model_dir=model_dir)
+    # Load audio file
+    print("Loading audio file...")
+    x, fs = librosa.load(audio_file, sr=None, mono=True)
+    print(f"Loaded audio: {len(x)/fs:.2f}s at {fs}Hz sampling rate")
     
-    # Load the pre-trained models
-    print(f"Loading models from {model_dir}...")
-    model = load_model(model_dir)
+    # Extract middle portion of the audio, which typically has more stable voiced content
+    start_sec = len(x) // fs // 4  # Start at 1/4 of the file
+    duration_sec = 2  # Use 4 seconds of audio
+    start_sample = start_sec * fs
+    end_sample = start_sample + duration_sec * fs
     
-    # Load the audio file
-    print(f"Loading audio file: {audio_file}")
-    x, fs = librosa.load(audio_file, sr=None)
+    if end_sample > len(x):
+        end_sample = len(x)
     
-    print(f"Audio file details:")
-    print(f"  - Duration: {len(x) / fs:.2f} seconds")
-    print(f"  - Sampling rate: {fs} Hz")
-    print(f"  - Number of samples: {len(x)}")
+    x = x[start_sample:end_sample]
+    print(f"Using audio segment: {start_sec}s to {start_sec + duration_sec}s")
     
-    # Set time interval for F0 estimation (frame length in seconds)
-    dt = 0.005  # 5ms
+    # Load models for nebula_est
+    print("Loading nebula models...")
+    models = []
+    for i in range(NUM_BANDS): 
+        model_path = os.path.join(model_dir, f"gmm_band_{i}.pkl")
+        with open(model_path, 'rb') as f:
+            models.append(pickle.load(f))
+    print(f"Loaded {len(models)} models")
     
-    # Estimate F0 using the Nebula algorithm
-    print("\nEstimating F0 using PyNebula...")
-    try:
-        f0_nebula, time_axis, log_posterior, lmap = nebula_est(model, x, fs, dt=dt, return_details=True)
+    # Run nebula_est pitch estimation
+    print("Running nebula_est pitch estimation...")
+    thop = 0.005  # 5ms hop time
+    f0_nebula, v_nebula, pv_nebula, lmap = nebula_est(models, x, fs, thop)
+    
+    # Run pyworld pitch estimation
+    print("Running pyworld pitch estimation...")
+    frame_period = thop * 1000  # convert to ms for pyworld
+    # Convert the audio to float64 for PyWorld
+    x_double = x.astype(np.float64)
+    _f0_pw, t_pw = pw.dio(x_double, fs, frame_period=frame_period)
+    f0_pw = pw.stonemask(x_double, _f0_pw, t_pw, fs)
+    
+    # Make sure both estimates have the same length
+    min_len = min(len(f0_nebula), len(f0_pw))
+    f0_nebula = f0_nebula[:min_len]
+    f0_pw = f0_pw[:min_len]
+    
+    # Create voiced mask for pyworld (similar to nebula)
+    v_pw = (f0_pw > 0).astype(int) * 2  # Convert to 0/2 format like nebula
+    
+    # Time axis for plotting
+    t = np.arange(min_len) * thop
+    
+    # Compute metrics for voiced regions only
+    voiced_mask_nebula = (v_nebula == 2)
+    voiced_mask_pw = (v_pw == 2)
+    voiced_mask_both = voiced_mask_nebula & voiced_mask_pw
+    
+    print(f"Frames with voiced detection - Nebula: {np.sum(voiced_mask_nebula)}, PyWorld: {np.sum(voiced_mask_pw)}, Both: {np.sum(voiced_mask_both)}")
+    
+    # Compute statistics only for frames where both methods detect voice
+    if np.sum(voiced_mask_both) > 0:
+        f0_nebula_voiced = f0_nebula[voiced_mask_both]
+        f0_pw_voiced = f0_pw[voiced_mask_both]
         
-        print(f"PyNebula F0 estimation completed successfully!")
-        print(f"  - Number of frames: {len(f0_nebula)}")
+        # Compute mean absolute error and correlation
+        mae = np.mean(np.abs(f0_nebula_voiced - f0_pw_voiced))
+        correlation = np.corrcoef(f0_nebula_voiced, f0_pw_voiced)[0, 1]
         
-        # Handle the case where there might be no voiced frames
-        voiced_f0 = f0_nebula[f0_nebula > 0]
-        if len(voiced_f0) > 0:
-            print(f"  - F0 range (PyNebula): {np.min(voiced_f0):.1f} - {np.max(voiced_f0):.1f} Hz")
-        else:
-            print(f"  - No voiced frames detected by PyNebula")
-        
-        # Estimate F0 using WORLD (pyworld)
-        print("\nEstimating F0 using WORLD (pyworld)...")
-        # Convert to float64 and ensure samples are in [-1, 1] if not already
-        x_world = x.astype(np.float64)
-        if np.max(np.abs(x_world)) > 1.0:
-            x_world = x_world / np.max(np.abs(x_world))
-            
-        # Extract F0, spectral envelope, and aperiodicity using WORLD
-        f0_world, time_world = pw.dio(x_world, fs, f0_floor=30.0, f0_ceil=1100.0, frame_period=dt*1000)  # dio provides a coarse F0 estimation
-        f0_world = pw.stonemask(x_world, f0_world, time_world, fs)  # stonemask refines the F0 estimation
-        
-        print(f"WORLD F0 estimation completed successfully!")
-        print(f"  - Number of frames: {len(f0_world)}")
-        
-        # Handle the case where there might be no voiced frames
-        voiced_f0_world = f0_world[f0_world > 0]
-        if len(voiced_f0_world) > 0:
-            print(f"  - F0 range (WORLD): {np.min(voiced_f0_world):.1f} - {np.max(voiced_f0_world):.1f} Hz")
-        else:
-            print(f"  - No voiced frames detected by WORLD")
-        
-        # Plot the results
-        plt.figure(figsize=(12, 9))
-        
-        # Plot the waveform
-        plt.subplot(3, 1, 1)
-        t = np.arange(len(x)) / fs
-        plt.plot(t, x)
-        plt.title("Waveform")
-        plt.xlabel("Time (s)")
-        plt.ylabel("Amplitude")
-        plt.grid(True)
-        
-        # Plot both F0 estimates in the same panel for comparison
-        plt.subplot(3, 1, 2)
-        plt.plot(time_axis, f0_nebula, 'b-', label='PyNebula F0', alpha=0.7)
-        plt.plot(time_world, f0_world, 'r-', label='WORLD F0', alpha=0.7)
-        plt.title("Fundamental Frequency (F0) Comparison")
-        plt.xlabel("Time (s)")
-        plt.ylabel("Frequency (Hz)")
-        
-        # Set y-limit to include all F0 values but cap at 1100 Hz to avoid extreme outliers
-        max_f0 = min(1100, max(np.max(f0_nebula) * 1.1 if len(voiced_f0) > 0 else 500, 
-                               np.max(f0_world) * 1.1 if len(voiced_f0_world) > 0 else 500))
-        plt.ylim([0, max_f0])
-        plt.grid(True)
-        plt.legend()
-        
-        # Plot the log posterior
-        plt.subplot(3, 1, 3)
-        plt.plot(time_axis, log_posterior)
-        plt.title("Log Posterior (PyNebula)")
-        plt.xlabel("Time (s)")
-        plt.ylabel("Log Posterior")
-        plt.grid(True)
-        
-        plt.tight_layout()
-        
-        # Save the figure
-        output_file = "f0_comparison_same_panel.png"
-        plt.savefig(output_file)
-        print(f"Comparison results saved to {output_file}")
-        
-        # Also save raw F0 values for further analysis
-        np.savez('f0_comparison.npz', 
-                 f0_nebula=f0_nebula, 
-                 time_nebula=time_axis, 
-                 f0_world=f0_world, 
-                 time_world=time_world)
-        print("Raw F0 values saved to f0_comparison.npz")
-        
-        # Calculate statistics for comparison
-        if len(voiced_f0) > 0 and len(voiced_f0_world) > 0:
-            # Only compare frames where both methods found voiced speech
-            # Need to interpolate as frame counts might be different
-            min_len = min(len(f0_nebula), len(f0_world))
-            
-            # Simple comparison by truncating both arrays
-            f0_nebula_trunc = f0_nebula[:min_len]
-            f0_world_trunc = f0_world[:min_len]
-            
-            # Calculate mean absolute difference for voiced frames
-            voiced_mask = (f0_nebula_trunc > 0) & (f0_world_trunc > 0)
-            if np.any(voiced_mask):
-                mean_abs_diff = np.mean(np.abs(f0_nebula_trunc[voiced_mask] - f0_world_trunc[voiced_mask]))
-                print(f"\nComparison statistics:")
-                print(f"  - Mean absolute difference: {mean_abs_diff:.2f} Hz")
-                
-                # Calculate correlation
-                corr = np.corrcoef(f0_nebula_trunc[voiced_mask], f0_world_trunc[voiced_mask])[0, 1]
-                print(f"  - Correlation coefficient: {corr:.4f}")
-        
-        plt.show()
-        
-        return f0_nebula, f0_world, time_axis, time_world
-        
-    except Exception as e:
-        print(f"Error during F0 estimation: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return None
+        print(f"Mean Absolute Error: {mae:.2f} Hz")
+        print(f"Correlation: {correlation:.4f}")
+    else:
+        print("No common voiced regions detected for comparison")
+    
+    # Compute voicing agreement
+    voicing_agreement = np.mean(v_nebula == v_pw)
+    print(f"Voicing Agreement: {voicing_agreement:.4f}")
+    
+    # Plot Likelihood Map from nebula_est
+    plt.figure(figsize=(12, 8))
+    plt.subplot(111)
+    
+    # Generate frequency axis (assuming lmap shape is [time, frequency])
+    # For better visualization, use log scale for frequency
+    freq_min = 40  # Minimum F0 in Hz (common for speech)
+    freq_max = 1000  # Maximum F0 in Hz
+    n_freq = lmap.shape[1]
+    freq_axis = np.logspace(np.log10(freq_min), np.log10(freq_max), n_freq)
+    
+    # Create time-frequency heatmap of likelihood values
+    plt.pcolormesh(t, freq_axis, lmap.T, shading='auto', cmap='viridis')
+    plt.colorbar(label='Likelihood')
+    
+    # Plot the F0 estimates on top of the likelihood map
+    plt.plot(t, f0_nebula * (v_nebula == 2), 'r.', markersize=2, label='Nebula F0')
+    plt.plot(t, f0_pw * (v_pw == 2), 'w.', markersize=2, label='PyWorld F0')
+    
+    plt.yscale('log')  # Use log scale for frequency axis
+    plt.ylim([freq_min, freq_max])
+    plt.title('Likelihood Map with F0 Estimates')
+    plt.xlabel('Time (s)')
+    plt.ylabel('Frequency (Hz)')
+    plt.legend()
+    
+    # Save and show the likelihood map plot
+    lmap_plot_path = os.path.join("test_results", os.path.basename(audio_file).replace('.wav', '_lmap.png'))
+    plt.tight_layout()
+    plt.savefig(lmap_plot_path)
+    print(f"Likelihood map plot saved to: {lmap_plot_path}")
+    plt.show()
+    
+    # Plot results (original comparison plots)
+    plt.figure(figsize=(12, 10))
+    
+    # Plot waveform
+    plt.subplot(3, 1, 1)
+    t_audio = np.arange(len(x)) / fs
+    plt.plot(t_audio, x)
+    plt.title('Audio Waveform')
+    plt.xlabel('Time (s)')
+    plt.ylabel('Amplitude')
+    plt.grid(True)
+    
+    # Plot F0 contours
+    plt.subplot(3, 1, 2)
+    # Plot F0 only for voiced frames
+    plt.plot(t, f0_nebula * (v_nebula == 2), 'b.', markersize=4, label='Nebula F0')
+    plt.plot(t, f0_pw * (v_pw == 2), 'r.', markersize=4, label='PyWorld F0')
+    plt.xlabel('Time (s)')
+    plt.ylabel('Frequency (Hz)')
+    plt.title('F0 Comparison: Nebula vs PyWorld')
+    plt.legend()
+    plt.grid(True)
+    
+    # Plot voicing decisions
+    plt.subplot(3, 1, 3)
+    plt.plot(t, v_nebula, 'b-', label='Nebula Voicing')
+    plt.plot(t, v_pw, 'r-', label='PyWorld Voicing')
+    plt.xlabel('Time (s)')
+    plt.ylabel('Voicing Status')
+    plt.title('Voicing Decision Comparison')
+    plt.legend()
+    plt.grid(True)
+    
+    plt.tight_layout()
+    
+    # Save plot
+    output_dir = "test_results"
+    os.makedirs(output_dir, exist_ok=True)
+    output_file = os.path.join(output_dir, os.path.basename(audio_file).replace('.wav', '_comparison.png'))
+    plt.savefig(output_file)
+    print(f"Plot saved to: {output_file}")
+    
+    # Display plot
+    plt.show()
+    
+    # Return comparison results
+    results = {
+        'f0_nebula': f0_nebula,
+        'f0_pyworld': f0_pw,
+        'v_nebula': v_nebula,
+        'v_pyworld': v_pw,
+        'lmap': lmap,
+        'metrics': {
+            'mae': mae if 'mae' in locals() else None,
+            'correlation': correlation if 'correlation' in locals() else None,
+            'voicing_agreement': voicing_agreement
+        }
+    }
+    
+    return results
 
 if __name__ == "__main__":
     # Get audio file from command line arguments if provided

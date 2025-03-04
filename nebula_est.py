@@ -46,7 +46,7 @@ def nebula_est(models, x, x_fs, thop=0.005):
     # Resample if needed
     fs = 8000
     if x_fs != fs:
-        x = librosa.resample(x, x_fs, fs)
+        x = librosa.resample(x, orig_sr=x_fs, target_sr=fs)
     x = preprocess_signal(x)  # Assume preprocessing function exists
 
     # Define frequency bands
@@ -57,6 +57,7 @@ def nebula_est(models, x, x_fs, thop=0.005):
     fres = fc
 
     # Compute SNR and Instantaneous Frequency (IF) features
+    print("Computing SNR and Instantaneous Frequency features...")
     SNR1, IF1, SNR2, IF2, SNR0 = estimate_ifsnr(x, naxis, fc, fres, "nuttall98", "hanning")
 
     # Convert SNR features to dB
@@ -67,21 +68,26 @@ def nebula_est(models, x, x_fs, thop=0.005):
     IF2 *= fs
 
     # Compute likelihood map
+    print("Computing likelihood map...")
     Lmap, f = make_likelihood_map(models, SNR1, IF1, SNR2, IF2, SNR0)
     
     # Apply postprocessing
+    print("Applying postprocessing...")
     lmap = postprocess(np.exp(Lmap), 1.5 / f / fs / thop) 
 
     # Apply Viterbi filtering
     LF0 = np.tile(np.arange(1, Lmap.shape[1] + 1), (Lmap.shape[0], 1))
     ptrans = norm.pdf(np.arange(Lmap.shape[1]), 0, 2)
+    print("Applying Viterbi filtering...")
     s, Ltotal = viterbi_filter(LF0, lmap, ptrans / np.sum(ptrans))  # Assume vitfilt1 function exists
 
     # Compute voicing probability
+    print("Computing voicing probability...")
     q, pv = detect_voicing_status(np.log(lmap), s)
     v = 2 - q  # Convert q into voicing decision
 
     # Refine F0 estimates
+    print("Refining F0 estimates...")
     f0 = refine_f0(np.log(lmap), s, f)
     if len(f0) == 1:
         f0 *= v
@@ -237,6 +243,7 @@ if __name__ == "__main__":
     from scipy.io import wavfile
     import numpy as np
     
+    
     # Test the nebula_est function with a sample audio file
     print("Testing nebula_est function...")
     
@@ -266,7 +273,7 @@ if __name__ == "__main__":
     t = np.linspace(0, duration, int(fs * duration), endpoint=False)
     
     # Create a signal with a mixture of frequencies
-    f0 = 150  # Fundamental frequency in Hz
+    f0 = 130  # Fundamental frequency in Hz
     signal = np.sin(2 * np.pi * f0 * t)  # Fundamental
     # Add harmonics
     signal += 0.5 * np.sin(2 * np.pi * (2 * f0) * t)  # 2nd harmonic
