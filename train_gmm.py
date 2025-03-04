@@ -6,11 +6,6 @@ from config import NUM_BANDS
 from make_random_dataset import make_random_dataset
 
 
-def mag2db(mag):
-    eps = 1e-10
-    return 20 * np.log10(np.maximum(mag, eps))
-
-
 def train_gmm(features, n_components=16):
     """
     Python 版 train_gmm.m
@@ -145,7 +140,7 @@ def compute_lcal(gmm_models, f_values, SNR0, SNR1, SNR2, IF1, IF2):
         
         # Compute mean likelihood over all frames
         Lcal[i, :] = np.mean(Lj, axis=0)
-
+        
     return Lcal
 
 

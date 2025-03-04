@@ -1,85 +1,98 @@
-"""
-Post-processing functions for smoothing and refining F0 estimates.
-"""
 import numpy as np
-from scipy.signal import medfilt
+from scipy.interpolate import interp1d
 
-def postprocess_results(f0_raw):
+def postprocess(L, navg):
     """
-    Post-process raw F0 estimates to produce a smoother and more accurate F0 contour.
-    
-    This function applies:
-    1. Median filtering to remove outliers
-    2. Interpolation to fill in unvoiced regions (gaps in the F0 contour)
+    Smooths likelihood maps using running average interpolation.
     
     Parameters:
-        f0_raw: Raw F0 estimates (numpy array)
+        L (np.ndarray): Input likelihood matrix, shape (n_frames, n_frequencies)
+        navg (np.ndarray): Window size for each frequency, shape (n_frequencies,)
     
     Returns:
-        f0_processed: Processed F0 contour
+        Lsmooth (np.ndarray): Smoothed likelihood matrix, same shape as L
     """
-    # Apply median filtering to remove outliers
-    f0_filtered = medfilt(f0_raw, kernel_size=5)
+    Lsmooth = L.copy()
     
-    # Simple gap filling through linear interpolation
-    # In a real implementation, we would want to identify voiced/unvoiced regions
-    # and only interpolate within reasonable boundaries
-    f0_processed = fill_gaps(f0_filtered)
+    # Process each column (frequency channel)
+    for i in range(L.shape[1]):
+        # Calculate normalized cumulative sum
+        cs = np.cumsum(L[:, i]) / navg[i] / 2
+        
+        # Create indices
+        idx = np.arange(L.shape[0])
+        idx_h = idx + navg[i]
+        idx_l = idx - navg[i]
+        
+        # Create interpolation function
+        interpolator = interp1d(idx, cs, bounds_error=False, fill_value="extrapolate")
+        
+        # Apply interpolation and difference
+        Lsmooth[:, i] = interpolator(idx_h) - interpolator(idx_l)
     
-    return f0_processed
+    return Lsmooth
 
-def fill_gaps(f0):
-    """
-    Fill gaps in the F0 contour using linear interpolation.
+if __name__ == "__main__":
+    import matplotlib.pyplot as plt
     
-    In a more advanced implementation, this would consider:
-    - Voiced/unvoiced detection
-    - Maximum gap duration for interpolation
-    - Boundary conditions
+    # Create a test likelihood matrix
+    n_frames = 100
+    n_frequencies = 5
     
-    Parameters:
-        f0: F0 contour with potential gaps (numpy array)
+    # Create noisy data
+    np.random.seed(42)  # For reproducibility
+    L = np.zeros((n_frames, n_frequencies))
     
-    Returns:
-        f0_filled: F0 contour with gaps filled by interpolation
-    """
-    # Make a copy to avoid modifying the input
-    f0_filled = f0.copy()
+    # Add some patterns and noise to different frequency channels
+    x = np.linspace(0, 2*np.pi, n_frames)
     
-    # Find indices where F0 is zero or NaN (indicating unvoiced regions)
-    unvoiced = np.where(np.logical_or(f0_filled == 0, np.isnan(f0_filled)))[0]
+    # Create different patterns for each frequency
+    L[:, 0] = np.sin(x) + 0.3 * np.random.randn(n_frames)  # Sine wave with noise
+    L[:, 1] = np.sin(2*x) + 0.3 * np.random.randn(n_frames)  # Higher frequency sine
+    L[:, 2] = (x > np.pi).astype(float) + 0.3 * np.random.randn(n_frames)  # Step function
+    L[:, 3] = np.exp(-0.05 * (x - np.pi)**2) + 0.3 * np.random.randn(n_frames)  # Gaussian
+    L[:, 4] = 0.5 * np.random.randn(n_frames)  # Pure noise
     
-    # If there are no gaps, return the original
-    if len(unvoiced) == 0:
-        return f0_filled
+    # Define different window sizes for each frequency channel
+    navg = np.array([3, 5, 7, 10, 15])
     
-    # Find continuous segments of unvoiced frames
-    gaps = []
-    gap_start = unvoiced[0]
+    # Apply the postprocessing
+    L_smooth = postprocess(L, navg)
     
-    for i in range(1, len(unvoiced)):
-        if unvoiced[i] > unvoiced[i-1] + 1:
-            # Gap ends at previous index
-            gaps.append((gap_start, unvoiced[i-1]))
-            # New gap starts
-            gap_start = unvoiced[i]
+    # Plot the results
+    plt.figure(figsize=(15, 10))
     
-    # Add the last gap
-    gaps.append((gap_start, unvoiced[-1]))
+    for i in range(n_frequencies):
+        # Original signal
+        plt.subplot(n_frequencies, 2, 2*i+1)
+        plt.plot(x, L[:, i])
+        plt.title(f"Original Signal - Channel {i+1}")
+        plt.xlabel("Time")
+        plt.ylabel("Likelihood")
+        
+        # Smoothed signal
+        plt.subplot(n_frequencies, 2, 2*i+2)
+        plt.plot(x, L_smooth[:, i])
+        plt.title(f"Smoothed Signal - Channel {i+1} (Window Size = {navg[i]})")
+        plt.xlabel("Time")
+        plt.ylabel("Likelihood")
     
-    # Interpolate across each gap
-    for start, end in gaps:
-        # Only interpolate if the gap is surrounded by voiced frames
-        if start > 0 and end < len(f0_filled) - 1:
-            # Linear interpolation
-            left_value = f0_filled[start - 1]
-            right_value = f0_filled[end + 1]
-            
-            # Create interpolation values
-            gap_length = end - start + 1
-            interp_values = np.linspace(left_value, right_value, gap_length + 2)[1:-1]
-            
-            # Fill the gap
-            f0_filled[start:end+1] = interp_values
+    plt.tight_layout()
+    plt.savefig("postprocess_test.png")
+    plt.show()
     
-    return f0_filled
+    print("Postprocessing test completed!")
+    print("The smoothed signals were saved to 'postprocess_test.png'")
+    
+    # Calculate and print signal improvement metrics
+    original_variance = np.var(L, axis=0)
+    smoothed_variance = np.var(L_smooth, axis=0)
+    
+    print("\nSignal Improvement Metrics:")
+    print("==========================")
+    print("Channel | Window Size | Original Variance | Smoothed Variance | Variance Reduction (%)")
+    print("-----------------------------------------------------------------------")
+    
+    for i in range(n_frequencies):
+        variance_reduction = 100 * (1 - smoothed_variance[i] / original_variance[i])
+        print(f"{i+1:7d} | {navg[i]:11d} | {original_variance[i]:17.4f} | {smoothed_variance[i]:17.4f} | {variance_reduction:20.2f}")

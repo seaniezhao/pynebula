@@ -8,7 +8,7 @@ from scipy import signal
 import soundfile as sf
 
 
-def preprocess_signal(x, fs, dither_level=0.05, dc_cutoff=50/4000):
+def preprocess_signal(x, dither_level=0.05, dc_cutoff=50/4000):
     """
     Preprocess audio signal:
     
@@ -33,23 +33,13 @@ def preprocess_signal(x, fs, dither_level=0.05, dc_cutoff=50/4000):
     thrd = peak * dither_level
     
     # Remove DC component
-    x = dcnotch(x, dc_cutoff)
+    x_filtered = dcnotch(x, dc_cutoff)
     
-    # Add dithering noise where signal RMS is below threshold
-    # Generate condition mask where RMS is below threshold
-    mask = xrms < thrd
-    # Generate random noise scaled by difference between threshold and RMS
-    noise = np.random.randn(len(x)) * (thrd - xrms)
-    # Apply noise only where mask is True (RMS < threshold)
-    y = x + mask * noise
-    
-    # Downsample if sampling rate is greater than 16000 Hz
-    target_fs = 16000
-    if fs > target_fs:
-        x = librosa.resample(x, orig_sr=fs, target_sr=target_fs)
-        fs = target_fs
-        
-    return x, fs
+    # Add dither noise to low-energy regions
+    noise = np.random.randn(*x.shape) * (thrd - xrms)
+    y = x_filtered + np.where(xrms < thrd, noise, 0)
+
+    return y
 
 def dcnotch(x, cutoff=50/4000):
     """

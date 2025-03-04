@@ -8,7 +8,7 @@ import librosa
 import matplotlib.pyplot as plt
 import pyworld as pw
 from nebula_est import nebula_est
-from load_model import load_model
+
 from train_gmm import train_and_save_models
 
 def test_with_audio_file(audio_file='test.wav', model_dir='./model'):
