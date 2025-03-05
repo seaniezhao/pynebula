@@ -10,6 +10,7 @@ from train_gmm import conditional_gmm
 from postprocess import postprocess
 from vitfilt import viterbi_filter
 from binvitsearch import binvitsearch
+import soundfile as sf
 
 
 def mag2db(magnitude):
@@ -272,7 +273,7 @@ if __name__ == "__main__":
     t = np.linspace(0, duration, int(fs * duration), endpoint=False)
     
     # Create a signal with a mixture of frequencies
-    f0 = 120  # Fundamental frequency in Hz
+    f0 = 170  # Fundamental frequency in Hz
     signal = np.sin(2 * np.pi * f0 * t)  # Fundamental
     # Add harmonics
     signal += 0.5 * np.sin(2 * np.pi * (2 * f0) * t)  # 2nd harmonic
@@ -284,6 +285,9 @@ if __name__ == "__main__":
     
     # Normalize
     signal = signal / np.max(np.abs(signal))
+    
+    # save test signal as audio
+    sf.write('test_100.wav', signal, fs)
     
     # 计算 FFT
     from scipy.fftpack import fft
