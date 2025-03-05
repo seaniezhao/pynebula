@@ -240,7 +240,6 @@ if __name__ == "__main__":
     import os
     import pickle
     import matplotlib.pyplot as plt
-    from scipy.io import wavfile
     import numpy as np
     
     
@@ -273,7 +272,7 @@ if __name__ == "__main__":
     t = np.linspace(0, duration, int(fs * duration), endpoint=False)
     
     # Create a signal with a mixture of frequencies
-    f0 = 130  # Fundamental frequency in Hz
+    f0 = 120  # Fundamental frequency in Hz
     signal = np.sin(2 * np.pi * f0 * t)  # Fundamental
     # Add harmonics
     signal += 0.5 * np.sin(2 * np.pi * (2 * f0) * t)  # 2nd harmonic
@@ -286,41 +285,141 @@ if __name__ == "__main__":
     # Normalize
     signal = signal / np.max(np.abs(signal))
     
+    # 计算 FFT
+    from scipy.fftpack import fft
+    N = len(signal)
+    freqs = np.fft.fftfreq(N, 1/fs)  # 频率轴
+    fft_spectrum = np.abs(fft(signal))[:N // 2]  # 计算振幅谱
+    
+    
     # Run F0 estimation
     print("Estimating F0...")
     f0_est, v, pv, lmap = nebula_est(models, signal, fs)
     
+    # Estimate F0 using PyWorld for comparison
+    print("Estimating F0 with PyWorld for comparison...")
+    import pyworld as pw
+    signal_double = signal.astype(np.float64)  # Convert to float64 for PyWorld
+    thop = 0.005  # 5ms hop time for analysis
+    frame_period = thop * 1000  # Convert to ms for PyWorld
+    _f0_pw, t_pw = pw.dio(signal_double, fs, frame_period=frame_period)  # Raw pitch extraction
+    f0_pw = pw.stonemask(signal_double, _f0_pw, t_pw, fs)  # Pitch refinement
+    
+    # Calculate time axes for plots
+    t_f0 = np.linspace(0, duration, len(f0_est))
+    t_pw_full = np.linspace(0, duration, len(f0_pw))
+    
     # Plot results
     print("Plotting results...")
-    plt.figure(figsize=(12, 8))
+    plt.figure(figsize=(12, 15))  # Make figure taller to accommodate extra plot
     
     # Plot signal
-    plt.subplot(3, 1, 1)
+    plt.subplot(5, 1, 1)
     plt.plot(t, signal)
     plt.title("Test Signal")
     plt.xlabel("Time (s)")
     plt.ylabel("Amplitude")
     
-    # Plot F0 estimate
-    plt.subplot(3, 1, 2)
-    t_f0 = np.linspace(0, duration, len(f0_est))
-    plt.plot(t_f0, f0_est)
-    plt.title("Estimated F0")
+    # Plot FFT spectrum for reference
+    plt.subplot(5, 1, 2)
+    plt.plot(freqs[:N//2], fft_spectrum)
+    plt.title("Frequency Spectrum")
+    plt.xlabel("Frequency (Hz)")
+    plt.ylabel("Amplitude")
+    plt.grid(True)
+    # Mark fundamental and harmonics
+    plt.axvline(x=f0, color='r', linestyle='--', label=f"F0: {f0} Hz")
+    plt.axvline(x=2*f0, color='g', linestyle='--', label=f"2F0: {2*f0} Hz")
+    plt.axvline(x=3*f0, color='b', linestyle='--', label=f"3F0: {3*f0} Hz")
+    plt.legend()
+    
+    # Plot likelihood map (lmap)
+    plt.subplot(5, 1, 3)
+    t_lmap = np.linspace(0, duration, lmap.shape[0])
+    
+    # Generate frequency axis for lmap
+    freq_min = 40  # Minimum F0 in Hz
+    freq_max = 800  # Maximum F0 in Hz
+    n_freq = lmap.shape[1]
+    freq_axis = np.logspace(np.log10(freq_min), np.log10(freq_max), n_freq)
+    
+    # Plot the likelihood map as a heatmap
+    plt.pcolormesh(t_lmap, freq_axis, lmap.T, shading='auto', cmap='viridis')
+    plt.colorbar(label='Likelihood')
+    
+    # Overlay F0 estimates on the likelihood map
+    plt.plot(t_f0, f0_est * (v > 1), 'r.', markersize=3, label='Nebula F0')
+    plt.plot(t_pw_full, f0_pw * (f0_pw > 0), 'w.', markersize=3, label='PyWorld F0')
+    
+    # Mark true F0 and harmonics
+    plt.axhline(y=f0, color='r', linestyle='--', label=f"True F0: {f0} Hz")
+    plt.axhline(y=2*f0, color='g', linestyle='--', label=f"2F0: {2*f0} Hz")
+    plt.axhline(y=3*f0, color='b', linestyle='--', label=f"3F0: {3*f0} Hz")
+    
+    plt.yscale('log')  # Use log scale for frequency axis
+    plt.ylim([freq_min, freq_max])
+    plt.title("Likelihood Map with F0 Estimates")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Frequency (Hz)")
+    plt.legend(loc='upper right')
+    
+    # Plot F0 estimates
+    plt.subplot(5, 1, 4)
+    plt.plot(t_f0, f0_est, 'b-', label='Nebula F0')
+    
+    # Plot PyWorld F0
+    plt.plot(t_pw_full, f0_pw, 'g-', label='PyWorld F0')
+    
+    plt.title("Estimated F0 Comparison")
     plt.xlabel("Time (s)")
     plt.ylabel("Frequency (Hz)")
     plt.axhline(y=f0, color='r', linestyle='--', label=f"True F0: {f0} Hz")
+    plt.axhline(y=2*f0, color='g', linestyle='--', label=f"2F0: {2*f0} Hz")
+    plt.axhline(y=3*f0, color='b', linestyle='--', label=f"3F0: {3*f0} Hz")
     plt.legend()
+    plt.grid(True)
     
     # Plot voicing decision
-    plt.subplot(3, 1, 3)
-    plt.plot(t_f0, v)
+    plt.subplot(5, 1, 5)
+    plt.plot(t_f0, v, 'b-', label='Nebula Voicing')
+    # Create voicing decision for PyWorld (0 = unvoiced, 2 = voiced)
+    v_pw = (f0_pw > 0).astype(int) * 2
+    plt.plot(t_pw_full, v_pw, 'g-', label='PyWorld Voicing')
     plt.title("Voicing Decision (2=voiced, 1=unvoiced)")
     plt.xlabel("Time (s)")
     plt.ylabel("Decision")
+    plt.legend()
+    plt.grid(True)
     
     plt.tight_layout()
     plt.savefig("nebula_est_test.png")
     plt.show()
     
-    print(f"Test completed. Average estimated F0: {np.mean(f0_est[v > 1])} Hz (True F0: {f0} Hz)")
+    # Calculate metrics
+    min_len = min(len(f0_est), len(f0_pw))
+    f0_est_trunc = f0_est[:min_len]
+    f0_pw_trunc = f0_pw[:min_len]
+    v_trunc = v[:min_len]
+    v_pw_trunc = v_pw[:min_len]
+    
+    # Only compare voiced frames
+    voiced_mask = (v_trunc > 1) & (v_pw_trunc > 0)
+    if np.sum(voiced_mask) > 0:
+        mae = np.mean(np.abs(f0_est_trunc[voiced_mask] - f0_pw_trunc[voiced_mask]))
+        correlation = np.corrcoef(f0_est_trunc[voiced_mask], f0_pw_trunc[voiced_mask])[0, 1]
+        print(f"Mean Absolute Error between Nebula and PyWorld: {mae:.2f} Hz")
+        print(f"Correlation between Nebula and PyWorld: {correlation:.4f}")
+        
+        # Compute octave error rate
+        octave_diff = np.abs(np.log2(f0_est_trunc[voiced_mask] / f0_pw_trunc[voiced_mask]))
+        octave_error_rate = np.mean(octave_diff > 0.4)  # Threshold for detecting octave errors
+        print(f"Octave Error Rate: {octave_error_rate:.4f}")
+    
+    voicing_agreement = np.mean((v_trunc > 1) == (v_pw_trunc > 0))
+    print(f"Voicing Agreement between Nebula and PyWorld: {voicing_agreement:.4f}")
+    
+    print(f"Test completed. Average estimated F0:")
+    print(f"  Nebula: {np.mean(f0_est[v > 1]):.2f} Hz")
+    print(f"  PyWorld: {np.mean(f0_pw[f0_pw > 0]):.2f} Hz")
+    print(f"  True F0: {f0} Hz")
     print(f"Results saved to nebula_est_test.png")
