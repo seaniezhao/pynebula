@@ -2,6 +2,8 @@
 
 A Python implementation of the Nebula fundamental frequency (F0) estimation algorithm, which uses Gaussian Mixture Models (GMMs) to estimate pitch in speech and musical signals.
 
+original implementation: https://github.com/Sleepwalking/nebula
+
 ## Project Overview
 
 PyNebula implements a GMM-based likelihood mapping approach to pitch tracking. This method creates a likelihood map of potential fundamental frequencies and selects the most likely F0 trajectory using dynamic programming. The implementation includes:
