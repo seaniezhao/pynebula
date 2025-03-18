@@ -233,4 +233,4 @@ def train_and_save_models(num_samples=10, n_components=16, model_dir='./model'):
 
 
 if __name__ == "__main__":
-    train_and_save_models(10000)
+    train_and_save_models(200)
